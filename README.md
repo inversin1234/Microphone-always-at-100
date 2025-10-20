@@ -3,9 +3,11 @@
 Microphone-always-at-100 is a tiny Windows utility that keeps your microphone input level pinned at 100% so you never sound quiet in calls again. The script watches your preferred recording device at a configurable interval and immediately pushes it back to full volume whenever an app or driver turns it down.
 
 ## Features
-- **Auto-reset microphone input level** – Select any active capture device and the script continuously enforces 100% volume.
+- **Auto-reset microphone input level** – Select any active capture device and the script continuously enforces your preferred volume.
+- **Adjustable target volume** – Choose the exact percentage you want enforced instead of being limited to 100%.
 - **Configurable refresh rate** – Choose how often (in seconds) the check runs to balance responsiveness and resource use.
-- **Simple graphical interface** – Built with Tkinter for an easy, dependency-light UI.
+- **Live device management** – Refresh the microphone list without restarting the app, with clear availability messaging.
+- **Polished monitoring dashboard** – Modern Tkinter styling, visual target gauge, and live status indicators show when the level was last applied and when it will be checked again.
 
 ## Requirements
 - Windows 10/11 (the [`pycaw`](https://github.com/AndreMiras/pycaw) audio APIs only work on Windows through WASAPI).
@@ -28,9 +30,10 @@ pip install pycaw comtypes
    python MicrophoneEnhancer.py
    ```
 3. Pick your microphone from the drop-down list.
-4. Set how frequently (in seconds) you want the script to re-apply the 100% volume level.
-5. Click **Start** to begin monitoring. The volume will be forced to maximum on the specified cadence.
-6. Click **Stop** to pause monitoring when you no longer need it.
+4. Set how frequently (in seconds) you want the script to re-apply the target volume level.
+5. Use the slider to choose the exact volume percentage to enforce (default: 100%) and verify the target via the progress gauge.
+6. Click **Start monitoring** to begin. The volume will be forced to the selected level on the specified cadence while the status panel confirms each enforcement.
+7. Click **Stop** to pause monitoring when you no longer need it.
 
 > **Tip:** Start the utility before joining meetings that tend to lower your microphone. Leaving it running in the background is usually sufficient, since the volume enforcement only happens on the chosen interval.
 

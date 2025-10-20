@@ -402,7 +402,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-=======
+
 from tkinter import ttk
 import comtypes
 from pycaw.pycaw import AudioUtilities, IMMDeviceEnumerator, EDataFlow

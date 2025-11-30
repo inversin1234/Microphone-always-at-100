@@ -55,11 +55,15 @@ class MicrophoneApp:
         self.device_name_var = tk.StringVar()
         self.frequency_var = tk.StringVar(value="5")
         self.target_volume_var = tk.IntVar(value=100)
+        self.muted_var = tk.BooleanVar(value=False)
+        self.current_level_var = tk.StringVar(value="Current level: — | Muted: —")
         self.status_message_var = tk.StringVar(value="Select a microphone to begin.")
         self.device_details_var = tk.StringVar(value="No device selected.")
         self.last_applied_var = tk.StringVar(value="Last applied: —")
         self.next_check_var = tk.StringVar(value="Next check in: —")
         self.target_display_var = tk.StringVar(value="Target: 100%")
+
+        self.log_messages: List[str] = []
 
         self._build_layout()
         self.refresh_devices(initial=True)
@@ -203,11 +207,30 @@ class MicrophoneApp:
         self.target_progress = ttk.Progressbar(volume_frame, maximum=100, value=100)
         self.target_progress.pack(fill=tk.X)
 
+        ttk.Label(volume_frame, textvariable=self.current_level_var, style="Info.TLabel").pack(
+            anchor=tk.W, pady=(8, 0)
+        )
+
+        ttk.Checkbutton(
+            volume_frame,
+            text="Mute microphone",
+            variable=self.muted_var,
+            command=self.toggle_mute,
+            style="TCheckbutton",
+        ).pack(anchor=tk.W, pady=(6, 0))
+
         actions = ttk.Frame(main, style="Card.TFrame")
         actions.pack(fill=tk.X, pady=(0, 18))
 
         self.start_button = ttk.Button(actions, text="Start monitoring", style="Accent.TButton", command=self.start_monitoring)
         self.start_button.pack(side=tk.LEFT, expand=True, fill=tk.X)
+
+        ttk.Button(
+            actions,
+            text="Apply once",
+            command=self.apply_target_once,
+            style="TButton",
+        ).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(12, 0))
 
         self.stop_button = ttk.Button(
             actions,
@@ -242,6 +265,26 @@ class MicrophoneApp:
         ttk.Label(status_section, textvariable=self.last_applied_var, style="Info.TLabel").pack(anchor=tk.W, pady=(6, 0))
         ttk.Label(status_section, textvariable=self.next_check_var, style="Info.TLabel").pack(anchor=tk.W)
 
+        log_frame = ttk.Frame(status_section, style="Card.TFrame")
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=(8, 0))
+
+        ttk.Label(log_frame, text="Recent activity", style="Section.TLabel").pack(anchor=tk.W)
+        list_frame = ttk.Frame(log_frame, style="Card.TFrame")
+        list_frame.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
+        self.log_listbox = tk.Listbox(
+            list_frame,
+            height=6,
+            bg=self.palette["card"],
+            fg=self.palette["text"],
+            highlightthickness=0,
+            selectbackground=self.palette["accent"],
+            activestyle="none",
+        )
+        self.log_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.log_listbox.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.log_listbox.configure(yscrollcommand=scrollbar.set)
+
     def refresh_devices(self, initial: bool = False) -> None:
         """Fetch the list of active recording devices and update the combo box."""
         selected = self.device_name_var.get()
@@ -263,6 +306,7 @@ class MicrophoneApp:
             self.current_device = None
             self.endpoint_volume = None
             self.update_status("Connect or enable a microphone, then refresh.", level="warning")
+            self.update_current_level()
             self.stop_monitoring()
             return
 
@@ -276,12 +320,14 @@ class MicrophoneApp:
         if not self.current_device:
             self.device_details_var.set("No device selected.")
             self.endpoint_volume = None
+            self.update_current_level()
             return
         self.endpoint_volume = self.current_device.EndpointVolume
         device_id = getattr(self.current_device, "id", "Unknown ID")
         self.device_details_var.set(f"Friendly name: {name}\nDevice ID: {device_id}")
         if self.monitoring:
             self.update_status(f"Monitoring '{name}'.", level="success")
+        self.update_current_level()
 
     def _on_volume_change(self, value: str) -> None:
         try:
@@ -329,23 +375,36 @@ class MicrophoneApp:
         self.update_status(f"Monitoring '{selected}'.", level="success")
         self.enforce_target_volume()
 
+    def apply_target_once(self) -> None:
+        if not self.device_name_var.get():
+            messagebox.showinfo("No device selected", "Pick a microphone before applying the volume.")
+            return
+        self._apply_volume("Applied {level}% once.")
+
     def enforce_target_volume(self) -> None:
         if not self.monitoring or not self.endpoint_volume:
             return
-        target = max(0, min(100, self.target_volume_var.get())) / 100.0
+        if self._apply_volume("Enforcing {level}% on '{device}'."):
+            self.schedule_next_enforcement()
+
+    def _apply_volume(self, success_template: str) -> bool:
+        if not self.endpoint_volume:
+            self.update_status("No active microphone endpoint.", level="error")
+            return False
+        target = max(0, min(100, self.target_volume_var.get()))
+        scalar = target / 100.0
         try:
-            self.endpoint_volume.SetMasterVolumeLevelScalar(target, None)
+            self.endpoint_volume.SetMasterVolumeLevelScalar(scalar, None)
         except Exception as exc:  # noqa: BLE001
             self.update_status(f"Failed to set volume: {exc}", level="error")
             self.stop_monitoring()
-            return
+            return False
         timestamp = datetime.now().strftime("%H:%M:%S")
         self.last_applied_var.set(f"Last applied: {timestamp}")
-        self.update_status(
-            f"Enforcing {int(target * 100)}% on '{self.device_name_var.get()}'.",
-            level="success",
-        )
-        self.schedule_next_enforcement()
+        self.update_current_level()
+        device_name = self.device_name_var.get() or "device"
+        self.update_status(success_template.format(level=target, device=device_name), level="success")
+        return True
 
     def schedule_next_enforcement(self) -> None:
         if not self.monitoring:
@@ -387,11 +446,52 @@ class MicrophoneApp:
         color = colors.get(level, colors["info"])
         self.status_message_var.set(message)
         self.status_indicator.itemconfig(self.status_indicator_circle, fill=color)
+        self._log_status(message)
 
     def on_close(self) -> None:
         if self.after_id:
             self.root.after_cancel(self.after_id)
         self.root.destroy()
+
+    def update_current_level(self) -> None:
+        if not self.endpoint_volume:
+            self.current_level_var.set("Current level: — | Muted: —")
+            return
+        try:
+            level = int(self.endpoint_volume.GetMasterVolumeLevelScalar() * 100)
+            muted = bool(self.endpoint_volume.GetMute())
+        except Exception as exc:  # noqa: BLE001
+            self.current_level_var.set(f"Unable to read level ({exc}).")
+            return
+        self.muted_var.set(muted)
+        muted_text = "Yes" if muted else "No"
+        self.current_level_var.set(f"Current level: {level}% | Muted: {muted_text}")
+
+    def toggle_mute(self) -> None:
+        if not self.endpoint_volume:
+            self.update_status("Select a microphone before toggling mute.", level="warning")
+            self.muted_var.set(False)
+            return
+        desired = self.muted_var.get()
+        try:
+            self.endpoint_volume.SetMute(desired, None)
+        except Exception as exc:  # noqa: BLE001
+            self.update_status(f"Failed to change mute: {exc}", level="error")
+            self.muted_var.set(not desired)
+            return
+        state = "Muted" if desired else "Unmuted"
+        self.update_status(f"{state} '{self.device_name_var.get()}'.", level="success")
+        self.update_current_level()
+
+    def _log_status(self, message: str) -> None:
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        entry = f"[{timestamp}] {message}"
+        self.log_messages.append(entry)
+        self.log_messages = self.log_messages[-50:]
+        self.log_listbox.delete(0, tk.END)
+        for item in self.log_messages:
+            self.log_listbox.insert(tk.END, item)
+        self.log_listbox.yview_moveto(1)
 
 
 def main() -> None:
@@ -402,193 +502,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-from tkinter import ttk
-import comtypes
-from pycaw.pycaw import AudioUtilities, IMMDeviceEnumerator, EDataFlow
-from pycaw.constants import CLSID_MMDeviceEnumerator, DEVICE_STATE
-
-def MyGetAudioDevices(direction="in", State=DEVICE_STATE.ACTIVE.value):
-    devices = []
-    if direction == "in":
-        Flow = EDataFlow.eCapture.value
-    else:
-        Flow = EDataFlow.eRender.value
-    deviceEnumerator = comtypes.CoCreateInstance(
-        CLSID_MMDeviceEnumerator,
-        IMMDeviceEnumerator,
-        comtypes.CLSCTX_INPROC_SERVER)
-    if deviceEnumerator is None:
-        return devices
-    collection = deviceEnumerator.EnumAudioEndpoints(Flow, State)
-    if collection is None:
-        return devices
-    num_devices = collection.GetCount()
-    for i in range(num_devices):
-        imm_device = collection.Item(i)
-        devices.append(AudioUtilities.CreateDevice(imm_device))
-    return devices
-
-root = tk.Tk()
-root.title("Microphone volume control")
-root.configure(bg="#f0f0f0")
-root.geometry("340x360")
-
-
-main_frame = tk.Frame(root, bg="#f0f0f0", padx=20, pady=20)
-main_frame.pack(expand=True)
-
-label = tk.Label(main_frame, text="Select a mic:", bg="#f0f0f0", font=("Arial", 10))
-label.pack(pady=(0, 10))
-
-mics = []
-mic_dict = {}
-
-
-def refresh_devices():
-    """Refresh the list of available recording devices."""
-    global mics, mic_dict
-    mics = MyGetAudioDevices("in")
-    mic_names = [mic.FriendlyName for mic in mics]
-    mic_dict = {mic.FriendlyName: mic for mic in mics}
-    current_selection = combo.get()
-    combo["values"] = mic_names
-    if current_selection in mic_dict:
-        combo.set(current_selection)
-    elif mic_names:
-        combo.set(mic_names[0])
-    else:
-        combo.set("")
-
-
-combo = ttk.Combobox(main_frame, state="readonly", width=30)
-combo.pack(pady=(0, 10))
-
-refresh_button = tk.Button(
-    main_frame,
-    text="Refresh devices",
-    command=refresh_devices,
-    bg="#2196F3",
-    fg="white",
-    padx=10,
-    pady=5,
-)
-refresh_button.pack(pady=(0, 15))
-
-
-freq_label = tk.Label(main_frame, text="Check frequency (seconds):", bg="#f0f0f0", font=("Arial", 10))
-freq_label.pack(pady=(0, 5))
-freq_entry = tk.Entry(main_frame, width=10, justify="center")
-freq_entry.insert(0, "5")
-freq_entry.pack()
-
-
-volume_label = tk.Label(main_frame, text="Target volume (%)", bg="#f0f0f0", font=("Arial", 10))
-volume_label.pack(pady=(15, 5))
-
-volume_var = tk.IntVar(value=100)
-volume_slider = tk.Scale(
-    main_frame,
-    from_=0,
-    to=100,
-    orient=tk.HORIZONTAL,
-    variable=volume_var,
-    resolution=1,
-    length=220,
-    bg="#f0f0f0",
-    highlightthickness=0,
-)
-volume_slider.pack()
-
-
-status_label = tk.Label(
-    main_frame,
-    text="Select a microphone to begin.",
-    bg="#f0f0f0",
-    fg="#333333",
-    wraplength=260,
-    justify="center",
-)
-status_label.pack(pady=(15, 0))
-
-
-current_volume = None
-after_id = None
-
-
-def start():
-    global current_volume, after_id
-    selected = combo.get()
-    if not selected:
-        status_label.config(text="No microphone selected. Please choose a device.", fg="#b00020")
-        return
-    device = mic_dict.get(selected)
-    if not device:
-        status_label.config(
-            text="Selected microphone is unavailable. Refresh the device list.",
-            fg="#b00020",
-        )
-        return
-
-    current_volume = device.EndpointVolume
-
-    def set_target_volume():
-        global after_id
-        if current_volume:
-            target_level = max(0, min(100, volume_var.get())) / 100.0
-            current_volume.SetMasterVolumeLevelScalar(target_level, None)
-            status_label.config(
-                text=f"Enforcing {int(target_level * 100)}% on '{selected}'.",
-                fg="#2e7d32",
-            )
-        try:
-            freq = int(freq_entry.get())
-            if freq <= 0:
-                raise ValueError
-        except ValueError:
-            freq = 5
-            freq_entry.delete(0, tk.END)
-            freq_entry.insert(0, str(freq))
-        after_id = root.after(freq * 1000, set_target_volume)
-
-    set_target_volume()
-
-
-def stop():
-    global after_id
-    if after_id:
-        root.after_cancel(after_id)
-        after_id = None
-        status_label.config(text="Monitoring paused.", fg="#333333")
-
-
-button_frame = tk.Frame(main_frame, bg="#f0f0f0")
-button_frame.pack(pady=20)
-
-button_start = tk.Button(
-    button_frame,
-    text="Start",
-    command=start,
-    bg="#4CAF50",
-    fg="white",
-    padx=10,
-    pady=5,
-)
-button_start.pack(side=tk.LEFT, padx=10)
-
-button_stop = tk.Button(
-    button_frame,
-    text="Stop",
-    command=stop,
-    bg="#f44336",
-    fg="white",
-    padx=10,
-    pady=5,
-)
-button_stop.pack(side=tk.RIGHT, padx=10)
-
-
-refresh_devices()
-
-root.mainloop()
 
